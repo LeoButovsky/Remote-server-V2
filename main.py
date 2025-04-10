@@ -11,24 +11,21 @@ connected_clients = set()
 active_frontend_clients = set()
 active_deviceids = set()
 
-
-async def setup_database():
-    conn = await asyncpg.connect(DATABASE_URL)
-    await conn.execute('''
-        CREATE TABLE IF NOT EXISTS user_data (
-            deviceid TEXT PRIMARY KEY,
-            real_nickname TEXT DEFAULT 'None',
-            nickname TEXT NOT NULL,
-            server TEXT NOT NULL,
-            game_state TEXT NOT NULL,
-            last_active TIMESTAMP NOT NULL,
-            allowed BOOLEAN DEFAULT FALSE,
-            ip TEXT NOT NULL,
-            expire_date DATE
-        );
-    ''')
-    await conn.close()
-
+async def setup_database(pool):
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            CREATE TABLE IF NOT EXISTS user_data (
+                deviceid TEXT PRIMARY KEY,
+                real_nickname TEXT DEFAULT 'None',
+                nickname TEXT NOT NULL,
+                server TEXT NOT NULL,
+                game_state TEXT NOT NULL,
+                last_active TIMESTAMP NOT NULL,
+                allowed BOOLEAN DEFAULT FALSE,
+                ip TEXT NOT NULL,
+                expire_date DATE
+            );
+        ''')
 
 async def notify_clients():
     for ws in active_frontend_clients.copy():
@@ -38,7 +35,6 @@ async def notify_clients():
             except Exception as e:
                 print(f"Notify error: {e}")
                 active_frontend_clients.discard(ws)
-
 
 async def handle_ws(request):
     ws = web.WebSocketResponse()
@@ -60,7 +56,7 @@ async def handle_ws(request):
 
                     active_deviceids.add(deviceid)
 
-                    pool = await asyncpg.create_pool(DATABASE_URL)
+                    pool = request.app['pool']
                     async with pool.acquire() as conn:
                         user = await conn.fetchrow(
                             'SELECT * FROM user_data WHERE deviceid = $1', deviceid
@@ -106,7 +102,6 @@ async def handle_ws(request):
 
     return ws
 
-
 async def handle_frontend_ws(request):
     ws = web.WebSocketResponse()
     await ws.prepare(request)
@@ -121,9 +116,8 @@ async def handle_frontend_ws(request):
 
     return ws
 
-
 async def get_users(request):
-    pool = await asyncpg.create_pool(DATABASE_URL)
+    pool = request.app['pool']
     async with pool.acquire() as conn:
         users = await conn.fetch('''
             SELECT deviceid, real_nickname, nickname, server, game_state, 
@@ -154,15 +148,22 @@ async def get_users(request):
 
         return web.json_response(users_data)
 
-
 async def index(request):
     return web.FileResponse('./index.html')
 
+async def on_shutdown(app):
+    await app['pool'].close()
 
 async def main():
-    await setup_database()
+    # Создаем пул соединений
+    pool = await asyncpg.create_pool(DATABASE_URL)
+    # Инициализируем базу данных
+    await setup_database(pool)
 
     app = web.Application()
+    app['pool'] = pool
+    app.on_shutdown.append(on_shutdown)
+    
     app.router.add_get('/', index)
     app.router.add_get('/get_users', get_users)
     app.router.add_get('/ws', handle_ws)
@@ -175,7 +176,6 @@ async def main():
     print(f"Server running on port {port}")
     await site.start()
     await asyncio.Event().wait()
-
 
 if __name__ == '__main__':
     asyncio.run(main())
