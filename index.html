@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>User Monitoring</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background-color: #f8f9fa; }
+        tr:hover { background-color: #f1f1f1; }
+        .status-dot {
+            height: 12px;
+            width: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+        }
+        .active { background-color: #28a745; }
+        .inactive { background-color: #dc3545; }
+        .expire-soon { color: #ffc107; }
+        .expired { color: #dc3545; }
+    </style>
+</head>
+<body>
+    <h1>User Monitoring</h1>
+    <table id="usersTable">
+        <thead>
+            <tr>
+                <th>Real nickname</th>
+                <th>Nickname</th>
+                <th>Server</th>
+                <th>Game State</th>
+                <th>Active</th>
+                <th>Access</th>
+                <th>Days left</th>
+            </tr>
+        </thead>
+        <tbody>
+        </tbody>
+    </table>
+
+    <script>
+        const ws = new WebSocket('ws://localhost:8766');
+
+        ws.onmessage = function(event) {
+            if (event.data === 'update') {
+                fetchData();
+            }
+        };
+
+        function updateTable(users) {
+            const tbody = document.querySelector('#usersTable tbody');
+            tbody.innerHTML = users.map(user => `
+                <tr>
+                    <td>${user.real_nickname}</td>
+                    <td>${user.nickname}</td>
+                    <td>${user.server}</td>
+                    <td>${user.game_state}</td>
+                    <td>
+                        <span class="status-dot ${user.last_active.includes('Now') ? 'active' : 'inactive'}"></span>
+                        ${user.last_active}
+                    </td>
+                    <td>${user.allowed ? '✅' : '❌'}</td>
+                    <td class="${user.expire_days <= 3 ? 'expire-soon' : ''} ${user.expire_days <= 0 ? 'expired' : ''}">
+                        ${user.expire_days !== null ? `${user.expire_days} days` : 'N/A'}
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        async function fetchData() {
+            try {
+                const response = await fetch('http://localhost:8080/get_users');
+                const data = await response.json();
+                updateTable(data);
+            } catch (error) {
+                console.error('Ошибка получения данных:', error);
+            }
+        }
+
+        setInterval(fetchData, 2000);
+        fetchData();
+    </script>
+</body>
+</html>
