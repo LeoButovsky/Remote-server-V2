@@ -1,10 +1,11 @@
 import os
 import asyncpg
+import json
+import asyncio
 from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
-import json
-from websockets.server import WebSocketServerProtocol as WebSocket
+from websockets import WebSocketServerProtocol, serve  # Актуальные импорты
 
 app = FastAPI()
 ACTIVE_DURATION = timedelta(seconds=30)
@@ -37,15 +38,16 @@ async def home():
     return HTMLResponse(content=HTML_TEMPLATE)
 
 # WebSocket обработчик
-async def ws_handler(websocket: WebSocket):
-    await websocket.accept()
+async def handle_websocket(websocket: WebSocketServerProtocol):
     conn = await asyncpg.connect(DATABASE_URL)
     current_time = datetime.now(timezone.utc)
-    
+    unique_identifier = None
+
     try:
         async for message in websocket:
             data = json.loads(message)
             
+            # Обработка данных
             deviceid = data.get("deviceid", "-")
             ip = websocket.remote_address[0]
             server = data.get("server", "unknown")
@@ -66,13 +68,14 @@ async def ws_handler(websocket: WebSocket):
             """, deviceid, ip, server, nickname, license_active, current_time, unique_identifier)
 
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"WebSocket error: {e}")
     finally:
-        await conn.execute("""
-        UPDATE user_data 
-        SET last_active = $1 
-        WHERE unique_identifier = $2;
-        """, datetime.now(timezone.utc), unique_identifier)
+        if unique_identifier:
+            await conn.execute("""
+            UPDATE user_data 
+            SET last_active = $1 
+            WHERE unique_identifier = $2;
+            """, datetime.now(timezone.utc), unique_identifier)
         await conn.close()
 
 # Эндпоинт для данных
@@ -111,15 +114,15 @@ def format_last_active(time_diff, last_active):
     # Реализация форматирования времени как в оригинале
     pass
 
-# Запуск WebSocket сервера
-import uvicorn
-from websockets.server import serve
-import asyncio
 
 async def main():
-    server = await serve(ws_handler, "0.0.0.0", 8080)
-    await server.serve_forever()
+    async with serve(
+        handle_websocket,
+        host="0.0.0.0",
+        port=8080,
+        reuse_port=True
+    ):
+        await asyncio.Future()  # Бесконечное ожидание
 
 if __name__ == "__main__":
     asyncio.run(main())
-    uvicorn.run(app, host="0.0.0.0", port=8080)
